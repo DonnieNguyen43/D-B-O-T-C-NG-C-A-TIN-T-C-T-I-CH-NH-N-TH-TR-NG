@@ -453,13 +453,20 @@ def render_attention_heatmap_html(word_attention_list: list):
     """
     Tạo khối HTML thể hiện văn bản với hiệu ứng Heatmap sáng theo Self-Attention Weights.
     Tông màu học thuật (Nền trắng ngà, viền cấu trúc, chữ rõ nét, chống tràn dòng).
-    Đảm bảo loại bỏ hoàn toàn các ký tự thụt lề đầu dòng để tương thích an toàn với Streamlit markdown.
+    Đảm bảo loại bỏ hoàn toàn các ký tự thò thụt đầu dòng để tương thích an toàn với Streamlit markdown.
     """
     if not word_attention_list:
         return f"<p style='color:{COLOR_TEXT_MUTED}; font-family:Be Vietnam Pro, sans-serif;'>Không có dữ liệu Attention trích xuất.</p>"
         
+    exclude_punct = {',', '.', ';', ':', '!', '?', '-', '--', '/', 'http', 'https', 'reuters', 'com', 'www', 'rt'}
     spans = []
-    for word, weight in word_attention_list:
+    for item in word_attention_list:
+        word = item[0]
+        weight = float(item[1])
+        w_clean = word.strip().lower()
+        if w_clean in exclude_punct or not any(c.isalpha() for c in w_clean):
+            weight = 0.05
+            
         alpha = 0.15 + (weight * 0.75)
         if weight >= 0.60:
             border = "border: 1.5px solid #C96A4B; box-shadow: 0 2px 6px rgba(201, 106, 75, 0.2);"
@@ -480,7 +487,7 @@ def render_attention_heatmap_html(word_attention_list: list):
             f'{border} transition: all 0.2s ease-in-out; cursor: default; '
             f'word-wrap: break-word; overflow-wrap: break-word;" '
             f'title="Attention Score: {weight:.4f}">'
-            f'{word} <sup style="font-size:9px; opacity:0.85; font-family:\'JetBrains Mono\', monospace;">{weight:.2f}</sup>'
+            f'{word} <sup style="font-size:9px; opacity:0.85; font-family: monospace;">{weight:.2f}</sup>'
             f'</span>'
         )
         spans.append(span)
@@ -490,7 +497,7 @@ def render_attention_heatmap_html(word_attention_list: list):
     full_html = (
         '<div style="background: #FFFFFF; border: 1px solid #D9CDC1; border-radius: 12px; '
         'padding: 20px 22px; line-height: 2.3; box-shadow: 0 2px 10px rgba(46, 38, 32, 0.05); '
-        'font-family: \'Be Vietnam Pro\', sans-serif; word-wrap: break-word; overflow-wrap: break-word;">'
+        'font-family: sans-serif; word-wrap: break-word; overflow-wrap: break-word;">'
         '<div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #8C4A32; margin-bottom: 12px; font-weight: 700;">'
         'Trọng số Chú ý Thực trích xuất từ Tầng cuối FinBERT (Layer 11 Self-Attention Weights):'
         '</div>'
@@ -503,3 +510,4 @@ def render_attention_heatmap_html(word_attention_list: list):
         '</div>'
     )
     return full_html
+

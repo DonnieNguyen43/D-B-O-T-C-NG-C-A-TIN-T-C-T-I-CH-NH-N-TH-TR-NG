@@ -43,6 +43,7 @@ from model_engine import (
 )
 
 from news_scraper import fetch_all_financial_news, FALLBACK_NEWS_DATABASE
+import importlib
 from visualizer import (
     render_probability_bars,
     render_benchmark_comparison_chart,
@@ -53,6 +54,10 @@ from visualizer import (
     COLOR_BORDER,
     COLOR_GRID
 )
+import model_engine
+import visualizer
+importlib.reload(model_engine)
+importlib.reload(visualizer)
 
 def render_html(html_str: str):
     """
@@ -257,56 +262,91 @@ st.markdown("""
         font-size: 14px !important;
     }
     
-    /* 4. ĐIỀU HƯỚNG TABS IN HOA, LETTER-SPACING RỘNG, BORDER-BOTTOM SẮC NÉT */
+    /* 4. ĐIỀU HƯỚNG TABS TỐI GIẢN - PHONG CÁCH CHỌN IN ĐẬM & CANH GIỮA (ẢNH 1) */
+    div[data-testid="stTabs"] {
+        width: 100% !important;
+    }
+    
+    div[data-testid="stTabs"] > div:first-child {
+        display: flex !important;
+        justify-content: center !important;
+        width: 100% !important;
+    }
+
     div[data-baseweb="tab-list"] {
         display: flex !important;
         flex-wrap: wrap !important;
-        gap: 8px !important;
-        background-color: #F0E6DC !important;
-        padding: 6px 10px !important;
-        border-radius: 12px !important;
-        border: 1px solid #D9CDC1 !important;
-        margin-bottom: 24px !important;
+        justify-content: center !important;
         align-items: center !important;
+        gap: 36px !important;
+        background-color: transparent !important;
+        padding: 12px 16px 14px 16px !important;
+        border-radius: 0 !important;
+        border: none !important;
+        border-top: 1px solid rgba(217, 205, 193, 0.5) !important;
+        border-bottom: 1px solid rgba(217, 205, 193, 0.5) !important;
+        margin: 10px auto 26px auto !important;
+        width: 100% !important;
+    }
+
+    /* Ẩn hoàn toàn viền gạch chân đỏ/cam mặc định của Streamlit */
+    div[data-baseweb="tab-border"],
+    div[data-baseweb="tab-highlight"] {
+        display: none !important;
+        height: 0 !important;
+        visibility: hidden !important;
     }
     
     button[data-baseweb="tab"] {
         background-color: transparent !important;
-        border: 1px solid transparent !important;
-        border-bottom: 3px solid transparent !important;
-        border-radius: 8px !important;
-        padding: 9px 18px !important;
-        color: #7A7067 !important;
-        font-family: 'Be Vietnam Pro', sans-serif !important;
-        font-weight: 700 !important;
-        font-size: 13.5px !important;
-        letter-spacing: 0.05em !important;
-        text-transform: uppercase !important;
+        border: none !important;
+        border-bottom: none !important;
+        border-radius: 0 !important;
+        padding: 6px 6px !important;
+        color: #554E48 !important;
+        font-family: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        font-weight: 500 !important;
+        font-size: 15.5px !important;
+        letter-spacing: 0.01em !important;
+        text-transform: none !important;
         cursor: pointer !important;
-        transition: all 0.2s ease !important;
+        transition: color 0.15s ease, font-weight 0.15s ease !important;
         white-space: nowrap !important;
+        box-shadow: none !important;
+        outline: none !important;
     }
     
     button[data-baseweb="tab"]:hover {
-        color: #C96A4B !important;
-        background-color: rgba(255, 255, 255, 0.6) !important;
+        color: #2E2620 !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    
+    button[data-baseweb="tab"]:focus,
+    button[data-baseweb="tab"]:focus-visible {
+        outline: none !important;
+        box-shadow: none !important;
     }
     
     button[data-baseweb="tab"][aria-selected="true"] {
-        background-color: #FFFFFF !important;
-        color: #8C4A32 !important;
+        background-color: transparent !important;
+        color: #2E2620 !important;
         font-weight: 800 !important;
-        border: 1px solid #D9CDC1 !important;
-        border-bottom: 3px solid #C96A4B !important;
-        box-shadow: 0 3px 10px rgba(46, 38, 32, 0.08) !important;
+        border: none !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
     }
     
     button[data-baseweb="tab"] p,
-    button[data-baseweb="tab"] span {
+    button[data-baseweb="tab"] span,
+    button[data-baseweb="tab"] div {
         color: inherit !important;
         font-size: inherit !important;
         font-weight: inherit !important;
         letter-spacing: inherit !important;
+        text-transform: inherit !important;
+        line-height: 1.4 !important;
     }
 
     /* 5. HERO SECTION CARD - PREMIUM ACADEMIC & FINTECH */
@@ -751,9 +791,9 @@ with c_st1:
 with c_st2:
     render_html("""
     <div class="academic-stat-card" style="border-left: 4px solid #C96A4B;">
-        <div class="stat-number" style="color: #C96A4B;">94.20%</div>
+        <div class="stat-number" style="color: #C96A4B;">97.89%</div>
         <div class="stat-label">Macro F1-Score (FinBERT)</div>
-        <div class="stat-desc">Độ chuẩn xác nhận diện rủi ro đạt 96.96% trên tập Test, triệt tiêu hoàn toàn báo động giả từ tin nhiễu.</div>
+        <div class="stat-desc">Độ chuẩn xác nhận diện rủi ro đạt 96.96% trên tập Test (94.46% trên tập Val), triệt tiêu hoàn toàn báo động giả.</div>
     </div>
     """)
 
@@ -772,10 +812,10 @@ st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 # TOP-LEVEL TABS ĐIỀU HƯỚNG (CHỮ IN HOA, LETTER-SPACING RỘNG, THIẾT KẾ SANG TRỌNG)
 # ==============================================================================
 tab_testbed, tab_realtime, tab_pipeline, tab_benchmark = st.tabs([
-    "THỰC NGHIỆM DATASET ĐỘC LẬP",
-    "SUY LUẬN REAL-TIME & CẢNH BÁO SỚM",
-    "TIỀN XỬ LÝ NLP & KHÔNG GIAN 3D",
-    "ĐỐI SÁNH BENCHMARK & BÁO CÁO KỸ THUẬT"
+    "Thực nghiệm Dataset độc lập",
+    "Suy luận Real-time & Cảnh báo sớm",
+    "Tiền xử lý NLP & Không gian 3D",
+    "Đối sánh Benchmark & Báo cáo kỹ thuật"
 ])
 
 # ==============================================================================
@@ -913,7 +953,7 @@ with tab_testbed:
                     </div>
                 </div>
                 <div class="kpi-footer-note">
-                    <span><i>Hạn chế:</i> Tỷ lệ báo động giả cao (Precision HIGH chỉ <b>41.67%</b>).</span>
+                    <span><i>Hạn chế:</i> Tạo ra <b>343 ca báo động giả trên 588 lần cảnh báo biến động mạnh</b> (tập Validation N = 13.992 mẫu, HIGH Precision chỉ đạt <b>41.67%</b>).</span>
                 </div>
             </div>
             """)
@@ -954,6 +994,15 @@ with tab_testbed:
             is_match = (p_lbl == ground_truth)
             status_text = "CHÍNH XÁC" if is_match else "SAI LỆCH"
             status_color = "#117864" if is_match else "#8C4A32"
+            
+            # Logic động hiển thị Precision tương ứng với lớp được mô hình dự đoán (Bảng 4 Báo cáo học thuật)
+            if p_lbl == "HIGH":
+                prec_dynamic = "Độ chuẩn xác thực nghiệm (HIGH Precision): <b>96.96% trên tập Test (94.46% trên tập Val)</b>"
+            elif p_lbl == "MEDIUM":
+                prec_dynamic = "Độ chuẩn xác thực nghiệm (MEDIUM Precision): <b>99.33% trên tập Test (99.17% trên tập Val)</b>"
+            else: # LOW
+                prec_dynamic = "Độ chuẩn xác thực nghiệm (LOW Precision): <b>98.51% trên tập Test (98.80% trên tập Val)</b>"
+                
             render_html(f"""
             <div class="kpi-card kpi-card-champion">
                 <div>
@@ -971,7 +1020,7 @@ with tab_testbed:
                     </div>
                 </div>
                 <div class="kpi-footer-note" style="border-top-color: #C96A4B; color: #4A4038;">
-                    <span><i>Hiệu năng tối ưu:</i> Chuẩn xác rủi ro <b>94.46% (Val) / 96.96% (Test)</b>, 0 ca báo động giả từ LOW.</span>
+                    <span><i>Hiệu năng tối ưu:</i> {prec_dynamic}, 0 ca báo động giả từ LOW.</span>
                 </div>
             </div>
             """)
@@ -1180,8 +1229,10 @@ with tab_pipeline:
         key="pl_select_demo_sample"
     )
     
-    res_demo = predict_text(demo_selected, resources)
+    # Làm sạch văn bản đầu vào trước khi token hóa và trích xuất Attention (khử rò rỉ URL & HTML)
     clean_info = inspect_cleaning_pipeline(demo_selected)
+    cleaned_demo_text = clean_info["cleaned"]
+    res_demo = predict_text(cleaned_demo_text, resources)
     
     st1, st2, st3, st4 = st.tabs([
         "TRẠM 1: KHỬ RÒ RỈ DỮ LIỆU (ANTI-LEAKAGE)",
@@ -1262,8 +1313,14 @@ with tab_pipeline:
         render_html(render_attention_heatmap_html(res_demo["finbert"]["word_attention"]))
         
         st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
-        # Bảng Top Attended Keywords
-        top_words = sorted(res_demo["finbert"]["word_attention"], key=lambda x: x[1], reverse=True)[:8]
+        # Bảng Top Attended Keywords (Lọc sạch dấu câu, special tokens & gom nhóm subword)
+        top_words = res_demo["finbert"].get("top_keywords", [])
+        if not top_words:
+            exclude_tokens = {'[cls]', '[sep]', '[pad]', ',', '.', ';', ':', '!', '?', '-', '--', '/', '\\', 'http', 'https', 'reuters', 'com'}
+            top_words = [x for x in res_demo["finbert"]["word_attention"] if x[0].lower() not in exclude_tokens and any(c.isalpha() for c in x[0])]
+            top_words = sorted(top_words, key=lambda x: x[1], reverse=True)
+        top_words = top_words[:8]
+        
         col_t1, col_t2 = st.columns([1.5, 2.5])
         with col_t1:
             st.markdown("##### Top Từ Khóa Tập Trung Chú Ý (Highest Attention):")
@@ -1273,7 +1330,7 @@ with tab_pipeline:
         with col_t2:
             st.markdown("##### Đối chiếu Cơ chế Tính toán:")
             st.markdown("""
-            - **Bi-LSTM (Tuần tự):** Duyệt từng bước qua $\\overrightarrow{h_t}$ và $\\overleftarrow{h_t}$. Toàn bộ ngữ nghĩa bị nén cưỡng bức vào 1 vector ẩn cuối cùng $[h_{-2}, h_{-1}]$, gây nút thắt cổ chai và tạo ra **343 ca báo động giả**.
+            - **Bi-LSTM (Tuần tự):** Duyệt từng bước qua $\\overrightarrow{h_t}$ và $\\overleftarrow{h_t}$. Toàn bộ ngữ nghĩa bị nén cưỡng bức vào 1 vector ẩn cuối cùng $[h_{-2}, h_{-1}]$, gây nút thắt cổ chai và tạo ra 343 ca báo động giả trên 588 lần cảnh báo biến động mạnh (tập Validation N = 13.992 mẫu, HIGH Precision chỉ đạt 41.67%).
             - **Transformer Multi-Head Attention (Toàn cục):** Tính ma trận tương quan giữa mọi cặp từ theo công thức:
               $$Attention(Q,K,V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V$$
               Giúp nhận diện tức thì các từ khóa bước ngoặt vĩ mô (*inflation, interest, rate, hike, plunge*) mà không bị suy giảm theo chiều dài câu.

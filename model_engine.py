@@ -261,39 +261,76 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         # Trích xuất vector tiềm ẩn 768 chiều từ token [CLS]
         finbert_cls_vector = finbert_out.hidden_states[-1][0, 0, :].cpu().numpy()
         
-        # Trích xuất ma trận Attention từ tầng cuối cùng (Layer 11)
-        layer11_attentions = finbert_out.attentions[-1][0] # Shape: (12 heads, seq_len, seq_len)
-        avg_attention = layer11_attentions.mean(dim=0).cpu().numpy() # Shape: (seq_len, seq_len)
-        cls_attention = avg_attention[0] # Chú ý từ [CLS] tới mọi token
+        # 1. Trích xuất ma trận Attention ở Layer 11 từ token [CLS] (index 0)
+        # finbert_out.attentions[11] có kích thước: [batch_size=1, num_heads=12, seq_len, seq_len]
+        cls_attn = finbert_out.attentions[11][0, :, 0, :] # Kích thước: [num_heads=12, seq_len]
+        
+        # 2. BẮT BUỘC tính trung bình cộng (MEAN) qua 12 heads (Tuyệt đối không dùng torch.max)
+        mean_attn = cls_attn.mean(dim=0).cpu().numpy() # Kích thước: [seq_len]
         
     finbert_tokens = finbert_tok.convert_ids_to_tokens(finbert_enc["input_ids"][0])
     
-    # Chuẩn hóa trọng số Attention gộp cho từng từ thực tế
-    word_attention = []
-    current_word = ""
-    current_weight = 0.0
-    subword_count = 0
+    # 3. Lọc sạch Dấu câu, Special Tokens & Rò rỉ Web khỏi Bảng Xếp hạng
+    exclude_tokens = {
+        '[cls]', '[sep]', '[pad]', ',', '.', ';', ':', '!', '?', '-', '--',
+        '/', '\\', 'http', 'https', 'reuters', 'com', 'www', 'rt'
+    }
     
-    for token, weight in zip(finbert_tokens, cls_attention):
+    def is_valid_keyword(token_str: str) -> bool:
+        t_clean = token_str.strip().lower()
+        if t_clean in exclude_tokens:
+            return False
+        # Bắt buộc chứa ít nhất 1 chữ cái alphabet
+        return any(c.isalpha() for c in t_clean)
+
+    # Gom nhóm Subwords (WordPiece Aggregation: crash + ##es -> crashes)
+    merged_items = []
+    current_word = ""
+    current_weights = []
+    
+    for token, weight in zip(finbert_tokens, mean_attn):
         if token in ["[CLS]", "[SEP]", "[PAD]"]:
             continue
         if token.startswith("##"):
             current_word += token[2:]
-            current_weight += float(weight)
-            subword_count += 1
+            current_weights.append(float(weight))
         else:
             if current_word:
-                word_attention.append((current_word, current_weight / max(subword_count, 1)))
+                avg_w = float(np.mean(current_weights)) if current_weights else 0.0
+                merged_items.append((current_word, avg_w))
             current_word = token
-            current_weight = float(weight)
-            subword_count = 1
+            current_weights = [float(weight)]
+            
     if current_word:
-        word_attention.append((current_word, current_weight / max(subword_count, 1)))
+        avg_w = float(np.mean(current_weights)) if current_weights else 0.0
+        merged_items.append((current_word, avg_w))
         
-    # Scale max attention = 1.0 để làm nổi bật trực quan
-    if word_attention:
-        max_att = max(w[1] for w in word_attention) if max(w[1] for w in word_attention) > 0 else 1.0
-        word_attention = [(w, wt / max_att) for w, wt in word_attention]
+    # 4. Chuẩn hóa điểm số Min-Max Scaling trên các từ vựng thực tế đưa dải điểm về [0.0 - 1.0]
+    valid_word_weights = [w[1] for w in merged_items if is_valid_keyword(w[0])]
+    if valid_word_weights:
+        min_w = float(min(valid_word_weights))
+        max_w = float(max(valid_word_weights))
+        w_range = max_w - min_w if max_w > min_w else 1.0
+    else:
+        min_w, max_w, w_range = 0.0, 1.0, 1.0
+        
+    word_attention = []
+    top_keywords_dict = {}
+    
+    for word, raw_w in merged_items:
+        if is_valid_keyword(word):
+            # Scale từ vựng thực tế về [0.0 - 1.0]
+            scaled_w = float(np.clip((raw_w - min_w) / w_range, 0.0, 1.0))
+            word_attention.append((word, scaled_w))
+            w_lower = word.lower()
+            if w_lower not in top_keywords_dict or scaled_w > top_keywords_dict[w_lower][1]:
+                top_keywords_dict[w_lower] = (word, scaled_w)
+        else:
+            # Dấu câu & ký hiệu giữ màu xám nhạt tự nhiên (0.05) trên Heatmap
+            word_attention.append((word, 0.05))
+            
+    # Bảng xếp hạng Top Từ Khóa Tập Trung Chú Ý: Lọc sạch dấu câu, sắp xếp giảm dần
+    top_keywords = sorted(list(top_keywords_dict.values()), key=lambda x: x[1], reverse=True)
         
     results["finbert"] = {
         "pred_id": finbert_pred,
@@ -301,7 +338,8 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         "probs": finbert_probs.tolist(),
         "confidence": float(finbert_probs[finbert_pred]),
         "tokens": finbert_tokens,
-        "word_attention": word_attention
+        "word_attention": word_attention,
+        "top_keywords": top_keywords
     }
     
     # 4. Tính toán Độ đồng thuận đa mô hình (Consensus Engine)
