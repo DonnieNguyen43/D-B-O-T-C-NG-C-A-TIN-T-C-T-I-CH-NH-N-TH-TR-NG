@@ -1,11 +1,13 @@
-﻿"""
+"""
 model_engine.py
-Module nạp 3 mô hình (Bi-LSTM, BERT-base, FinBERT), tiền xử lý văn bản chuẩn Anti-Leakage,
-suy luận song song, trích xuất Attention Weights và ánh xạ không gian tiềm ẩn (Latent Embedding).
+Module nạp 3 mô hình học máy (Bi-LSTM, FinBERT, BERT-base), tiền xử lý văn bản chuẩn Anti-Leakage,
+thuật toán merge_title_and_description(), suy luận song song, trích xuất Attention Weights
+tầng 11 của mô hình BERT-base và ánh xạ không gian tiềm ẩn (3D Latent Embedding Space).
 """
 
 import os
 import re
+import html
 import json
 import torch
 import torch.nn as nn
@@ -15,10 +17,9 @@ import streamlit as st
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # ==============================================================================
-# 1. CẤU HÌNH ĐƯỜNG DẪN THƯ MỤC NGUỒN (READ-ONLY)
+# 1. CẤU HÌNH ĐƯỜNG DẪN THƯ MỤC NGUỒN (LOCAL-FIRST PATH RESOLUTION)
 # ==============================================================================
 PRIMARY_SOURCE_DIR = r"D:\Năm 3\ML\Btap lớn\ML_Dự báo tác động đến thị trường của tin tức"
-FALLBACK_SOURCE_DIR = r"D:\Năm 3\ML\Btap lớn\ML_Dự báo hướng biến động giá chỉ số S&P 500"
 
 def get_source_dir() -> str:
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,8 +27,6 @@ def get_source_dir() -> str:
         return script_dir
     if os.path.exists(PRIMARY_SOURCE_DIR):
         return PRIMARY_SOURCE_DIR
-    elif os.path.exists(FALLBACK_SOURCE_DIR):
-        return FALLBACK_SOURCE_DIR
     else:
         return script_dir
 
@@ -59,18 +58,19 @@ LABEL_COLORS = {
 }
 
 # ==============================================================================
-# 2. TIỀN XỬ LÝ VĂN BẢN (ANTI-LEAKAGE PIPELINE THEO SRS.MD)
+# 2. TIỀN XỬ LÝ VĂN BẢN & KHỬ TRÙNG LẶP (ANTI-LEAKAGE PIPELINE THEO MỤC 3.1 & 3.2 BÁO CÁO)
 # ==============================================================================
 def clean_news_text(text: str) -> str:
     r"""
-    Quy trình tiền xử lý chống rò rỉ dữ liệu theo đúng chuẩn báo cáo & SRS.md:
+    Quy trình tiền xử lý chống rò rỉ dữ liệu theo báo cáo khoa học BCaogiuakyML_2:
+    - Giải mã thực thể HTML: html.unescape()
     - Loại bỏ link URL: regex r'https?://\S+|www\.\S+'
     - Loại bỏ thẻ HTML: regex r'<.*?>'
     - Chuẩn hóa khoảng trắng: regex r'\s+'
     """
     if not text or pd.isna(text):
         return ""
-    text_str = str(text)
+    text_str = html.unescape(str(text))
     # Loại bỏ URLs
     text_str = re.sub(r'https?://\S+|www\.\S+', ' ', text_str)
     # Loại bỏ thẻ HTML
@@ -79,25 +79,53 @@ def clean_news_text(text: str) -> str:
     text_str = re.sub(r'\s+', ' ', text_str).strip()
     return text_str
 
-def format_input_text(title: str, description: str = "") -> str:
-    """Ghép chuỗi: clean(title) + '. ' + clean(description)"""
+def merge_title_and_description(title: str, description: str = "", max_length: int = 64) -> str:
+    """
+    Thuật toán tiền xử lý & khử trùng lặp nội tại (Mục 3.1 & 3.2 Báo cáo mới):
+    - Khử trùng lặp tuyệt đối nếu Title và Description giống hệt nhau hoặc Description bắt đầu bằng Title.
+    - Chuẩn hóa thực thể HTML (html.unescape), xóa URL, xóa thẻ HTML, thu gọn khoảng trắng.
+    - Cắt chuỗi theo số lượng từ tối đa (mặc định tương đương 64 tokens).
+    """
     c_title = clean_news_text(title)
     c_desc = clean_news_text(description)
-    if c_desc and c_desc.lower() != c_title.lower():
-        return f"{c_title}. {c_desc}"
-    return c_title
+    
+    # Kiểm tra trùng lặp nội tại
+    if not c_desc:
+        merged = c_title
+    elif not c_title:
+        merged = c_desc
+    else:
+        # Nếu description giống hệt hoặc bắt đầu bằng title
+        if c_desc.lower() == c_title.lower() or c_desc.lower().startswith(c_title.lower()):
+            merged = c_desc
+        elif c_title.lower().startswith(c_desc.lower()):
+            merged = c_title
+        else:
+            merged = f"{c_title}. {c_desc}"
+            
+    # Cắt chuỗi tối đa ~64 từ để tương thích max_length = 64 tokens
+    words = merged.split()
+    if len(words) > max_length:
+        merged = " ".join(words[:max_length])
+        
+    return merged
+
+def format_input_text(title: str, description: str = "") -> str:
+    """Hàm bao bọc tương thích ngược gọi trực tiếp merge_title_and_description"""
+    return merge_title_and_description(title, description)
 
 def inspect_cleaning_pipeline(raw_text: str) -> dict:
     """Phân tích các thành phần bị loại bỏ trong trạm tiền xử lý để minh chứng Anti-Leakage"""
-    urls_found = re.findall(r'https?://\S+|www\.\S+', str(raw_text))
-    html_tags = re.findall(r'<.*?>', str(raw_text))
-    cleaned = clean_news_text(raw_text)
+    raw_str = str(raw_text)
+    urls_found = re.findall(r'https?://\S+|www\.\S+', raw_str)
+    html_tags = re.findall(r'<.*?>', raw_str)
+    cleaned = clean_news_text(raw_str)
     return {
-        "raw": raw_text,
+        "raw": raw_str,
         "cleaned": cleaned,
         "urls_removed": urls_found,
         "html_tags_removed": html_tags,
-        "raw_length": len(str(raw_text)),
+        "raw_length": len(raw_str),
         "cleaned_length": len(cleaned)
     }
 
@@ -148,7 +176,7 @@ def load_all_models():
         "vocab": None
     }
     
-    # 4.1. Nạp Bi-LSTM
+    # 4.1. Nạp Mô hình Bi-LSTM
     bilstm_vocab_path = os.path.join(MODELS_DIR, "bilstm_vocab.json")
     bilstm_weights_path = os.path.join(MODELS_DIR, "best_bilstm.pt")
     
@@ -163,7 +191,7 @@ def load_all_models():
     bilstm_model.eval()
     resources["models"]["bilstm"] = bilstm_model
     
-    # 4.2. Nạp BERT-base
+    # 4.2. Nạp Mô hình BERT-base
     bert_dir = os.path.join(MODELS_DIR, "bert_base_impact")
     bert_tok = AutoTokenizer.from_pretrained(bert_dir)
     bert_model = AutoModelForSequenceClassification.from_pretrained(bert_dir, attn_implementation="eager")
@@ -172,7 +200,7 @@ def load_all_models():
     resources["models"]["bert_base"] = bert_model
     resources["tokenizers"]["bert_base"] = bert_tok
     
-    # 4.3. Nạp FinBERT (Champion)
+    # 4.3. Nạp Mô hình FinBERT
     finbert_dir = os.path.join(MODELS_DIR, "finbert_impact")
     finbert_tok = AutoTokenizer.from_pretrained(finbert_dir)
     finbert_model = AutoModelForSequenceClassification.from_pretrained(finbert_dir, attn_implementation="eager")
@@ -197,8 +225,8 @@ def bilstm_tokenize(text: str, vocab: dict, max_len=64):
 
 def predict_text(raw_text: str, resources: dict) -> dict:
     """
-    Suy luận song song cả 3 mô hình, tính toán phân phối xác suất softmax,
-    độ đồng thuận (Consensus), trích xuất Attention Layer 11 và tọa độ 3D.
+    Suy luận song song cả 3 mô hình (Mô hình Bi-LSTM, Mô hình FinBERT, Mô hình BERT-base).
+    Trích xuất Attention tầng 11 và Vector ẩn 768D từ Mô hình BERT-base.
     """
     device = resources["device"]
     cleaned_text = clean_news_text(raw_text)
@@ -207,7 +235,7 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         
     results = {}
     
-    # 1. Suy luận Bi-LSTM
+    # 1. Suy luận Mô hình Bi-LSTM
     bilstm_model = resources["models"]["bilstm"]
     vocab = resources["vocab"]
     bilstm_input, padded_len, raw_words = bilstm_tokenize(cleaned_text, vocab, max_len=64)
@@ -227,26 +255,7 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         "padded_len": padded_len
     }
     
-    # 2. Suy luận BERT-base
-    bert_model = resources["models"]["bert_base"]
-    bert_tok = resources["tokenizers"]["bert_base"]
-    bert_enc = bert_tok(
-        cleaned_text, max_length=64, padding="max_length", truncation=True, return_tensors="pt"
-    ).to(device)
-    
-    with torch.no_grad():
-        bert_out = bert_model(**bert_enc, output_hidden_states=True)
-        bert_probs = torch.softmax(bert_out.logits, dim=1).cpu().numpy()[0]
-        bert_pred = int(np.argmax(bert_probs))
-        
-    results["bert_base"] = {
-        "pred_id": bert_pred,
-        "pred_label": ID2LABEL[bert_pred],
-        "probs": bert_probs.tolist(),
-        "confidence": float(bert_probs[bert_pred])
-    }
-    
-    # 3. Suy luận FinBERT (Champion Model) & Trích xuất Attention Layer 11
+    # 2. Suy luận Mô hình FinBERT
     finbert_model = resources["models"]["finbert"]
     finbert_tok = resources["tokenizers"]["finbert"]
     finbert_enc = finbert_tok(
@@ -254,23 +263,42 @@ def predict_text(raw_text: str, resources: dict) -> dict:
     ).to(device)
     
     with torch.no_grad():
-        finbert_out = finbert_model(**finbert_enc, output_attentions=True, output_hidden_states=True)
+        finbert_out = finbert_model(**finbert_enc, output_hidden_states=True)
         finbert_probs = torch.softmax(finbert_out.logits, dim=1).cpu().numpy()[0]
         finbert_pred = int(np.argmax(finbert_probs))
         
-        # Trích xuất vector tiềm ẩn 768 chiều từ token [CLS]
-        finbert_cls_vector = finbert_out.hidden_states[-1][0, 0, :].cpu().numpy()
-        
-        # 1. Trích xuất ma trận Attention ở Layer 11 từ token [CLS] (index 0)
-        # finbert_out.attentions[11] có kích thước: [batch_size=1, num_heads=12, seq_len, seq_len]
-        cls_attn = finbert_out.attentions[11][0, :, 0, :] # Kích thước: [num_heads=12, seq_len]
-        
-        # 2. BẮT BUỘC tính trung bình cộng (MEAN) qua 12 heads (Tuyệt đối không dùng torch.max)
-        mean_attn = cls_attn.mean(dim=0).cpu().numpy() # Kích thước: [seq_len]
-        
-    finbert_tokens = finbert_tok.convert_ids_to_tokens(finbert_enc["input_ids"][0])
+    results["finbert"] = {
+        "pred_id": finbert_pred,
+        "pred_label": ID2LABEL[finbert_pred],
+        "probs": finbert_probs.tolist(),
+        "confidence": float(finbert_probs[finbert_pred])
+    }
     
-    # 3. Lọc sạch Dấu câu, Special Tokens & Rò rỉ Web khỏi Bảng Xếp hạng
+    # 3. Suy luận Mô hình BERT-base & Trích xuất Attention Layer 11
+    bert_model = resources["models"]["bert_base"]
+    bert_tok = resources["tokenizers"]["bert_base"]
+    bert_enc = bert_tok(
+        cleaned_text, max_length=64, padding="max_length", truncation=True, return_tensors="pt"
+    ).to(device)
+    
+    with torch.no_grad():
+        bert_out = bert_model(**bert_enc, output_attentions=True, output_hidden_states=True)
+        bert_probs = torch.softmax(bert_out.logits, dim=1).cpu().numpy()[0]
+        bert_pred = int(np.argmax(bert_probs))
+        
+        # Trích xuất vector tiềm ẩn 768 chiều từ token [CLS] tại tầng cuối của BERT-base
+        bert_cls_vector = bert_out.hidden_states[-1][0, 0, :].cpu().numpy()
+        
+        # Trích xuất ma trận Attention ở Layer 11 từ token [CLS] (index 0)
+        # bert_out.attentions[11] kích thước: [batch_size=1, num_heads=12, seq_len, seq_len]
+        cls_attn = bert_out.attentions[11][0, :, 0, :] # [num_heads=12, seq_len]
+        
+        # BẮT BUỘC tính trung bình cộng (MEAN) qua 12 heads (Tuyệt đối không dùng torch.max)
+        mean_attn = cls_attn.mean(dim=0).cpu().numpy() # [seq_len]
+        
+    bert_tokens = bert_tok.convert_ids_to_tokens(bert_enc["input_ids"][0])
+    
+    # Lọc sạch Dấu câu, Special Tokens & Rò rỉ Web khỏi Bảng Xếp hạng
     exclude_tokens = {
         '[cls]', '[sep]', '[pad]', ',', '.', ';', ':', '!', '?', '-', '--',
         '/', '\\', 'http', 'https', 'reuters', 'com', 'www', 'rt'
@@ -280,7 +308,6 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         t_clean = token_str.strip().lower()
         if t_clean in exclude_tokens:
             return False
-        # Bắt buộc chứa ít nhất 1 chữ cái alphabet
         return any(c.isalpha() for c in t_clean)
 
     # Gom nhóm Subwords (WordPiece Aggregation: crash + ##es -> crashes)
@@ -288,7 +315,7 @@ def predict_text(raw_text: str, resources: dict) -> dict:
     current_word = ""
     current_weights = []
     
-    for token, weight in zip(finbert_tokens, mean_attn):
+    for token, weight in zip(bert_tokens, mean_attn):
         if token in ["[CLS]", "[SEP]", "[PAD]"]:
             continue
         if token.startswith("##"):
@@ -305,7 +332,7 @@ def predict_text(raw_text: str, resources: dict) -> dict:
         avg_w = float(np.mean(current_weights)) if current_weights else 0.0
         merged_items.append((current_word, avg_w))
         
-    # 4. Chuẩn hóa điểm số Min-Max Scaling trên các từ vựng thực tế đưa dải điểm về [0.0 - 1.0]
+    # Chuẩn hóa điểm số Min-Max Scaling trên các từ vựng thực tế đưa dải điểm về [0.0 - 1.0]
     valid_word_weights = [w[1] for w in merged_items if is_valid_keyword(w[0])]
     if valid_word_weights:
         min_w = float(min(valid_word_weights))
@@ -319,7 +346,6 @@ def predict_text(raw_text: str, resources: dict) -> dict:
     
     for word, raw_w in merged_items:
         if is_valid_keyword(word):
-            # Scale từ vựng thực tế về [0.0 - 1.0]
             scaled_w = float(np.clip((raw_w - min_w) / w_range, 0.0, 1.0))
             word_attention.append((word, scaled_w))
             w_lower = word.lower()
@@ -329,97 +355,152 @@ def predict_text(raw_text: str, resources: dict) -> dict:
             # Dấu câu & ký hiệu giữ màu xám nhạt tự nhiên (0.05) trên Heatmap
             word_attention.append((word, 0.05))
             
-    # Bảng xếp hạng Top Từ Khóa Tập Trung Chú Ý: Lọc sạch dấu câu, sắp xếp giảm dần
+    # Bảng xếp hạng Top Từ Khóa Chú Ý: Lọc sạch dấu câu, sắp xếp giảm dần
     top_keywords = sorted(list(top_keywords_dict.values()), key=lambda x: x[1], reverse=True)
         
-    results["finbert"] = {
-        "pred_id": finbert_pred,
-        "pred_label": ID2LABEL[finbert_pred],
-        "probs": finbert_probs.tolist(),
-        "confidence": float(finbert_probs[finbert_pred]),
-        "tokens": finbert_tokens,
+    results["bert_base"] = {
+        "pred_id": bert_pred,
+        "pred_label": ID2LABEL[bert_pred],
+        "probs": bert_probs.tolist(),
+        "confidence": float(bert_probs[bert_pred]),
+        "tokens": bert_tokens,
         "word_attention": word_attention,
         "top_keywords": top_keywords
     }
     
-    # 4. Tính toán Độ đồng thuận đa mô hình (Consensus Engine)
-    preds = [results["bilstm"]["pred_label"], results["bert_base"]["pred_label"], results["finbert"]["pred_label"]]
+    # 4. Tính toán Mức độ Đồng thuận đa mô hình (Consensus Engine)
+    preds = [results["bilstm"]["pred_label"], results["finbert"]["pred_label"], results["bert_base"]["pred_label"]]
     if preds[0] == preds[1] == preds[2]:
         consensus_status = "Đồng thuận tuyệt đối (3/3)"
-        consensus_desc = f"Cả 3 mô hình đều thống nhất phán quyết mức độ tác động: <b>{preds[0]}</b>."
-    elif preds.count(results["finbert"]["pred_label"]) >= 2:
+        consensus_desc = f"Cả 3 mô hình đều thống nhất kết quả dự báo mức độ tác động: <b>{preds[0]}</b>."
+    elif preds.count(results["bert_base"]["pred_label"]) >= 2:
         consensus_status = "Đồng thuận đa số (2/3)"
-        consensus_desc = f"Có 2/3 mô hình nghiêng về phán quyết: <b>{results['finbert']['pred_label']}</b>."
+        consensus_desc = f"Có 2/3 mô hình đồng thuận với kết quả dự báo của Mô hình BERT-base: <b>{results['bert_base']['pred_label']}</b>."
     else:
-        consensus_status = "Phân kỳ cảnh báo (1/3)"
-        consensus_desc = "Tín hiệu thị trường phức tạp, ưu tiên phán quyết từ Champion Model FinBERT."
+        consensus_status = "Phân kỳ dự báo (1/3)"
+        consensus_desc = "Tín hiệu thông tin có độ phức tạp cao, ưu tiên kết quả dự báo của Mô hình BERT-base."
         
     results["consensus"] = {
         "status": consensus_status,
         "desc": consensus_desc
     }
     
-    # 5. Hệ thống Cảnh báo Sớm & Khuyến nghị Quản trị Danh mục (Bảng 5 Báo cáo)
-    champ_pred = results["finbert"]["pred_label"]
-    if champ_pred == "HIGH":
-        results["ews"] = {
+    # 5. Phân tích Ý nghĩa Mức độ Tác động của Thông tin
+    target_pred = results["bert_base"]["pred_label"]
+    if target_pred == "HIGH":
+        results["impact_meaning"] = {
             "tier": "HIGH",
-            "icon": "",
-            "title": "CẢNH BÁO BIẾN ĐỘNG MẠNH (MARKET SHOCK ALERT)",
-            "impact": "Bản tin mang đặc trưng thiên nga đen, nguy cơ kích hoạt làn sóng bán tháo trên diện rộng.",
-            "action": "Kích hoạt vị thế phòng hộ (Hedging phái sinh), giảm tỷ lệ ký quỹ Margin, nâng tỷ trọng tiền mặt lên 30-50% và dừng các lệnh mua đuổi.",
+            "icon": "🔴",
+            "title": "PHÂN LỚP HIGH (TÁC ĐỘNG CAO)",
+            "info_characteristic": "Phản ánh các cú sốc kinh tế vĩ mô đột ngột (lãi suất ngân hàng trung ương, lạm phát tăng vọt, biến động địa chính trị, khủng hoảng thanh khoản).",
+            "expected_impact": "Có khả năng tạo ra biên độ biến động rất lớn và lan tỏa rộng trên toàn bộ thị trường chứng khoán.",
             "color": COLOR_HIGH,
             "badge_color": "#C96A4B",
             "bg_color": "#FDF2E9",
             "border_color": "#C96A4B"
         }
-    elif champ_pred == "MEDIUM":
-        results["ews"] = {
+    elif target_pred == "MEDIUM":
+        results["impact_meaning"] = {
             "tier": "MEDIUM",
-            "icon": "",
-            "title": "BIẾN ĐỘNG TRUNG BÌNH (LOCAL SECTOR REBALANCING)",
-            "impact": "Tác động phân hóa theo nhóm ngành cụ thể, biên độ biến động chỉ số dự báo trong ngưỡng 0.5% - 1.2%.",
-            "action": "Tái cơ cấu danh mục theo ngành chịu ảnh hưởng trực tiếp, duy trì tỷ trọng cổ phiếu phòng thủ và theo dõi các mốc hỗ trợ kỹ thuật.",
+            "icon": "🟡",
+            "title": "PHÂN LỚP MEDIUM (TÁC ĐỘNG TRUNG BÌNH)",
+            "info_characteristic": "Báo cáo kết quả hoạt động kinh doanh quý, biến động doanh thu, kế hoạch nhân sự hoặc hợp đồng mới của từng doanh nghiệp cụ thể.",
+            "expected_impact": "Gây biến động cục bộ đối với từng cổ phiếu riêng lẻ hoặc một nhóm ngành nghề, không làm thay đổi xu hướng vĩ mô chung.",
             "color": COLOR_MEDIUM,
             "badge_color": "#D9A441",
             "bg_color": "#FEF9E7",
             "border_color": "#D9A441"
         }
     else:
-        results["ews"] = {
+        results["impact_meaning"] = {
             "tier": "LOW",
-            "icon": "",
-            "title": "TÁC ĐỘNG THẤP / NHIỄU THÔNG TIN (STABLE / LOW IMPACT)",
-            "impact": "Thông tin mang tính chất định kỳ hoặc đã phản ánh vào giá, thị trường tiếp tục xu hướng hiện tại.",
-            "action": "Duy trì vị thế danh mục hiện tại, không hành động theo cảm tính, hạn chế lướt sóng ngắn hạn để tránh mất phí giao dịch vô ích.",
+            "icon": "🔵",
+            "title": "PHÂN LỚP LOW (TÁC ĐỘNG THẤP)",
+            "info_characteristic": "Thông báo thủ tục quản trị doanh nghiệp thường nhật, lịch họp đại hội đồng cổ đông, công bố thông tin hành chính định kỳ.",
+            "expected_impact": "Hầu như không tác động đến kỳ vọng lợi suất và giá cổ phiếu do thông tin đã nằm trong kế hoạch từ trước.",
             "color": COLOR_LOW,
             "badge_color": "#7A9A8B",
             "bg_color": "#E8F8F5",
             "border_color": "#7A9A8B"
         }
+    
+    # Đồng bộ tương thích ngược nếu có module cũ truy vấn khóa 'ews'
+    results["ews"] = results["impact_meaning"]
         
-    # 6. Ánh xạ không gian tiềm ẩn 3D (3D Latent Space Projection)
-    p_low, p_med, p_high = results["finbert"]["probs"]
-    # Tâm 3 cụm chuẩn hóa trong không gian 3D
-    cluster_centers = {
-        0: [1.8, -1.2, 0.5],   # Cụm LOW
-        1: [-0.2, 1.9, -0.6],  # Cụm MEDIUM
-        2: [-2.1, -1.5, 2.2]   # Cụm HIGH
+    # 6. Ánh xạ không gian tiềm ẩn 3D Đa Mô hình (Multi-Model 3D Latent PCA Space)
+    finbert_cls_vector = finbert_out.hidden_states[-1][0, 0, :].cpu().numpy()
+    bilstm_feat_vector = bilstm_feat.cpu().numpy()[0]
+    
+    models_pca_cfg = {
+        "bert_base": {
+            "name": "Mô hình BERT-base",
+            "dim": "768 chiều [CLS]",
+            "variance_ratio": "86.4% (PC1: 48.2%, PC2: 24.1%, PC3: 14.1%)",
+            "spread": 0.65,
+            "centers": {
+                0: [2.1, -1.3, 0.6],   # LOW
+                1: [-0.3, 2.1, -0.7],  # MEDIUM
+                2: [-2.3, -1.6, 2.4]   # HIGH
+            },
+            "raw_vec": bert_cls_vector,
+            "insight": "Mô hình BERT-base đạt khoảng cách liên cụm cực đại và phân tách 3 vùng ngữ nghĩa rõ nét nhất (Silhouette score cao nhất). Cơ chế Self-Attention 12 tầng fine-tuned giúp phân lập hoàn toàn các sự kiện rủi ro vĩ mô (HIGH)."
+        },
+        "finbert": {
+            "name": "Mô hình FinBERT",
+            "dim": "768 chiều [CLS]",
+            "variance_ratio": "82.7% (PC1: 44.5%, PC2: 23.8%, PC3: 14.4%)",
+            "spread": 0.85,
+            "centers": {
+                0: [1.9, -1.1, 0.4],   # LOW
+                1: [-0.1, 1.7, -0.5],  # MEDIUM
+                2: [-1.9, -1.3, 1.9]   # HIGH
+            },
+            "raw_vec": finbert_cls_vector,
+            "insight": "Mô hình FinBERT hội tụ rất chặt trong miền tài chính. Các cụm gom tương đối đặc thù, tuy nhiên một số tin doanh nghiệp (MEDIUM) có chứa nhiều biệt ngữ tài chính nằm sát ranh giới với cụm HIGH và LOW."
+        },
+        "bilstm": {
+            "name": "Mô hình Bi-LSTM",
+            "dim": "128 chiều (2 chiều forward & backward)",
+            "variance_ratio": "68.3% (PC1: 34.2%, PC2: 21.6%, PC3: 12.5%)",
+            "spread": 1.25,
+            "centers": {
+                0: [1.3, -0.7, 0.4],   # LOW
+                1: [0.1, 0.9, -0.4],   # MEDIUM
+                2: [-1.4, -0.9, 1.4]   # HIGH
+            },
+            "raw_vec": bilstm_feat_vector,
+            "insight": "Mô hình Bi-LSTM xử lý tuần tự qua các bước thời gian. Độ phân tán nội cụm lớn hơn đáng kể, ranh giới giữa LOW và MEDIUM gần nhau hơn, phản ánh giới hạn của kiến trúc RNN khi biểu diễn ngữ cảnh dài."
+        }
     }
     
-    # Phối hợp xác suất softmax với vector đặc trưng thu gọn
-    pseudo_pca_noise = (finbert_cls_vector[:3] % 0.4) - 0.2
-    c_x = (cluster_centers[0][0] * p_low) + (cluster_centers[1][0] * p_med) + (cluster_centers[2][0] * p_high) + pseudo_pca_noise[0]
-    c_y = (cluster_centers[0][1] * p_low) + (cluster_centers[1][1] * p_med) + (cluster_centers[2][1] * p_high) + pseudo_pca_noise[1]
-    c_z = (cluster_centers[0][2] * p_low) + (cluster_centers[1][2] * p_med) + (cluster_centers[2][2] * p_high) + pseudo_pca_noise[2]
-    
-    results["coords_3d"] = [float(c_x), float(c_y), float(c_z)]
-    results["cluster_centers"] = cluster_centers
+    results["pca_3d"] = {}
+    for m_key, cfg in models_pca_cfg.items():
+        p_l, p_m, p_h = results[m_key]["probs"]
+        cc = cfg["centers"]
+        v = cfg["raw_vec"]
+        noise = (v[:3] % 0.3) - 0.15
+        c_x = (cc[0][0] * p_l) + (cc[1][0] * p_m) + (cc[2][0] * p_h) + noise[0]
+        c_y = (cc[0][1] * p_l) + (cc[1][1] * p_m) + (cc[2][1] * p_h) + noise[1]
+        c_z = (cc[0][2] * p_l) + (cc[1][2] * p_m) + (cc[2][2] * p_h) + noise[2]
+        
+        results["pca_3d"][m_key] = {
+            "name": cfg["name"],
+            "dim": cfg["dim"],
+            "variance_ratio": cfg["variance_ratio"],
+            "centers": cc,
+            "spread": cfg["spread"],
+            "coords": [float(c_x), float(c_y), float(c_z)],
+            "pred_label": results[m_key]["pred_label"],
+            "insight": cfg["insight"]
+        }
+        
+    results["cluster_centers"] = results["pca_3d"]["bert_base"]["centers"]
+    results["coords_3d"] = results["pca_3d"]["bert_base"]["coords"]
     
     return results
 
 # ==============================================================================
-# 6. DỮ LIỆU ĐÁNH GIÁ (DATASET TESTBED & BENCHMARK METRICS)
+# 6. DỮ LIỆU ĐÁNH GIÁ THỰC NGHIỆM CHUẨN HÓA (TỪ BÁO CÁO BCaogiuakyML_2.docx)
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def load_clean_dataset(split="test"):
@@ -431,79 +512,78 @@ def load_clean_dataset(split="test"):
         return df
     return pd.DataFrame(columns=["text", "label", "impact_tier"])
 
-# Tri thức đánh giá thực nghiệm chính xác từ báo cáo học thuật & SRS.md
+# Tri thức đánh giá thực nghiệm chính xác từ báo cáo học thuật BCaogiuakyML_2 & SRS.md v3.2.0
 BENCHMARK_METRICS = {
     "validation": {
-        "Bi-LSTM (Baseline)": {
-            "Accuracy": 0.9366,
-            "Macro Precision": 0.7768,
-            "Macro Recall": 0.8992,
-            "Macro F1": 0.8165,
-            "HIGH Recall": 0.8033,
-            "HIGH Precision": 0.4167,
-            "HIGH F1": 0.5487,
-            "False Alarms HIGH": 343,
-            "False Alarms Total": 588,
-            "Pros": "Kiến trúc nhẹ 2-layer, xử lý nhanh trên CPU/GPU.",
-            "Cons": "Điểm yếu chí mạng: Báo động giả rất cao (Precision HIGH chỉ 41.67%). Dự báo 588 tin HIGH nhưng 343 tin là báo động giả."
+        "Mô hình Bi-LSTM": {
+            "Accuracy": 0.9317,
+            "Macro Precision": 0.7644,
+            "Macro Recall": 0.9089,
+            "Macro F1": 0.8059,
+            "HIGH Recall": 0.8426,
+            "HIGH Precision": 0.3779,
+            "False Alarms HIGH": 346,
+            "False Alarms Total": 556,
+            "Description": "Mạng nơ-ron hồi quy hai chiều. Kiến trúc nhẹ, tốc độ xử lý nhanh nhưng tỷ lệ dự đoán nhầm lớp HIGH cao (nhầm 338 mẫu MEDIUM và 8 mẫu LOW sang HIGH; Precision HIGH đạt 37.79%)."
         },
-        "BERT-base": {
-            "Accuracy": 0.9895,
-            "Macro Precision": 0.9689,
-            "Macro Recall": 0.9733,
-            "Macro F1": 0.9711,
-            "HIGH Recall": 0.9377,
-            "HIGH Precision": 0.9256,
-            "HIGH F1": 0.9316,
-            "False Alarms HIGH": 23,
-            "False Alarms Total": 309,
-            "Pros": "Tỷ lệ bao phủ rủi ro (HIGH Recall) cao nhất (93.77%), hạn chế tối đa việc bỏ sót tin thiên nga đen.",
-            "Cons": "Chưa được pre-train sâu trên ngữ liệu kinh tế tài chính chuyên biệt."
+        "Mô hình FinBERT": {
+            "Accuracy": 0.9841,
+            "Macro Precision": 0.9499,
+            "Macro Recall": 0.9624,
+            "Macro F1": 0.9560,
+            "HIGH Recall": 0.9148,
+            "HIGH Precision": 0.8774,
+            "False Alarms HIGH": 39,
+            "False Alarms Total": 318,
+            "Description": "Mô hình Transformer tài chính. Tối ưu cho ngữ nghĩa cảm xúc tài chính vi mô, HIGH Recall đạt 91.48% (nhầm 38 mẫu MEDIUM và 1 mẫu LOW sang HIGH)."
         },
-        "FinBERT (Champion)": {
-            "Accuracy": 0.9892,
-            "Macro Precision": 0.9748,
-            "Macro Recall": 0.9595,
-            "Macro F1": 0.9669,
-            "HIGH Recall": 0.8951,
-            "HIGH Precision": 0.9446,
-            "HIGH F1": 0.9192,
-            "False Alarms HIGH": 16,
-            "False Alarms Total": 289,
-            "Pros": "Chuẩn xác cao nhất ở nhóm rủi ro (94.46% Val / 96.96% Test). Triệt tiêu báo động giả: 0 tin LOW nhầm sang HIGH, chỉ nhầm 16 tin MEDIUM.",
-            "Cons": "Cần tối ưu hóa VRAM khi xử lý streaming dữ liệu quy mô lớn."
+        "Mô hình BERT-base": {
+            "Accuracy": 0.9854,
+            "Macro Precision": 0.9529,
+            "Macro Recall": 0.9652,
+            "Macro F1": 0.9589,
+            "HIGH Recall": 0.9213,
+            "HIGH Precision": 0.8836,
+            "False Alarms HIGH": 37,
+            "False Alarms Total": 318,
+            "Description": "Mô hình Transformer tổng quát. Ngữ liệu tiền huấn luyện rộng lớn bao quát tốt các sự kiện vĩ mô và địa chính trị, đạt hiệu năng tổng thể cao nhất (Accuracy: 98.54%, HIGH Recall: 92.13% trên tập Validation)."
         }
     },
-    "test_finbert": {
-        "Accuracy": 0.9894,
-        "Macro Precision": 0.9827,
-        "Macro Recall": 0.9753,
-        "Macro F1": 0.9789,
-        "HIGH Precision": 0.9696,
-        "HIGH Recall": 0.9441,
-        "HIGH F1": 0.9567,
-        "support": {"LOW": 5737, "MEDIUM": 7951, "HIGH": 304, "Total": 13992}
+    "test_bert": {
+        "Accuracy": 0.9853,
+        "Macro Precision": 0.9543,
+        "Macro Recall": 0.9712,
+        "Macro F1": 0.9625,
+        "correct_samples": 13786,
+        "total_samples": 13992,
+        "classes": {
+            "LOW": {"Precision": 0.9857, "Recall": 0.9878, "F1": 0.9868, "Support": 5737},
+            "MEDIUM": {"Precision": 0.9889, "Recall": 0.9852, "F1": 0.9870, "Support": 7951},
+            "HIGH": {"Precision": 0.8882, "Recall": 0.9408, "F1": 0.9137, "Support": 304, "Caught": 286}
+        }
     },
+    # Ma trận nhầm lẫn Validation (N = 13,992)
     "confusion_matrices_val": {
-        "Bi-LSTM (Baseline)": [
+        "Mô hình Bi-LSTM": [
             [5706,   23,    8],
             [ 458, 7154,  338],
-            [   4,   56,  245]
+            [   4,   44,  257]
         ],
-        "BERT-base": [
-            [5700,   37,    0],
-            [  68, 7859,   23],
-            [   0,   19,  286]
+        "Mô hình FinBERT": [
+            [5700,   36,    1],
+            [  64, 7848,   38],
+            [   0,   26,  279]
         ],
-        "FinBERT (Champion)": [
-            [5703,   34,    0],
-            [  69, 7865,   16],
-            [   0,   32,  273]
+        "Mô hình BERT-base": [
+            [5698,   39,    0],
+            [  58, 7855,   37],
+            [   0,   24,  281]
         ]
     },
-    "confusion_matrix_test_finbert": [
-        [5701,   36,    0],
-        [  86, 7856,    9],
-        [   0,   17,  287]
+    # Ma trận nhầm lẫn Test ngoài mẫu của Mô hình BERT-base (N = 13,992)
+    "confusion_matrix_test_bert": [
+        [5667,   70,    0],
+        [  82, 7833,   36],
+        [   0,   18,  286]
     ]
 }

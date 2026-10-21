@@ -3,9 +3,9 @@ visualizer.py
 Module trực quan hóa học thuật chuyên nghiệp cho đề tài Học máy:
 - Biểu đồ phân phối xác suất ngang (Horizontal Probability Stacked Bars) với cơ chế tự động ẩn số liệu tránh đè chữ
 - Ma trận nhầm lẫn đối kháng chuẩn tương phản WCAG (Contrast-Optimized Heatmap)
-- Hoạt ảnh không gian biểu diễn đa chiều 3D (Interactive 3D Latent Embedding Space)
+- Hoạt ảnh không gian biểu diễn đa chiều 3D (Interactive 3D Latent Embedding Space từ Mô hình BERT-base)
 - Biểu đồ đối sánh Benchmark hiệu năng các kiến trúc Deep Learning
-- Khối hiển thị Self-Attention Weights từ tầng 11 FinBERT
+- Khối hiển thị Self-Attention Weights từ tầng 11 Mô hình BERT-base
 """
 
 import numpy as np
@@ -32,12 +32,12 @@ COLOR_GRID = "#EFE5DA"         # Lưới mờ mềm
 def render_probability_bars(results: dict):
     """
     Biểu đồ thanh ngang thể hiện phân phối xác suất [P_LOW, P_MEDIUM, P_HIGH]
-    của cả 3 mô hình (Bi-LSTM, BERT-base, FinBERT).
+    của cả 3 mô hình (Mô hình Bi-LSTM, Mô hình FinBERT, Mô hình BERT-base).
     Loại bỏ hoàn toàn legend bên trong biểu đồ để chống đè chữ tuyệt đối.
     Chú giải màu sắc (Legend) được render độc lập, thoáng đãng phía trên biểu đồ.
     """
-    models = ["Bi-LSTM (Baseline)", "BERT-base", "FinBERT (Champion)"]
-    keys = ["bilstm", "bert_base", "finbert"]
+    models = ["Mô hình Bi-LSTM", "Mô hình FinBERT", "Mô hình BERT-base"]
+    keys = ["bilstm", "finbert", "bert_base"]
     
     p_low = [results[k]["probs"][0] * 100 for k in keys]
     p_med = [results[k]["probs"][1] * 100 for k in keys]
@@ -89,7 +89,7 @@ def render_probability_bars(results: dict):
         barmode='stack',
         showlegend=False,
         title=None,
-        height=190,
+        height=195,
         margin=dict(l=10, r=20, t=10, b=30),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
@@ -112,19 +112,17 @@ def render_probability_bars(results: dict):
 # ==============================================================================
 # 2. MA TRẬN NHẦM LẪN ĐẠT CHUẨN TƯƠNG PHẢN WCAG (CONTRAST-OPTIMIZED HEATMAP)
 # ==============================================================================
-def render_confusion_matrices(cm_dict: dict, split_title="TẬP KIỂM ĐỊNH VALIDATION (N = 13,992 MẪU)"):
+def render_confusion_matrices(cm_dict: dict, split_title="MA TRẬN NHẦM LẪN"):
     """
     Vẽ các ma trận nhầm lẫn với thang màu Terracotta - Nâu đất ấm áp.
     Mỗi ô được tự động gán màu chữ tương phản cao chuẩn WCAG:
     - Ô nền sáng (giá trị nhỏ): Chữ màu nâu đen #2E2620.
     - Ô nền đậm (giá trị lớn): Chữ màu trắng tinh #FFFFFF.
-    - Loại bỏ tiêu đề trùng lặp của Plotly (đã có tiêu đề Streamlit markdown ở trên).
     """
     labels = ["LOW", "MEDIUM", "HIGH"]
     model_names = list(cm_dict.keys())
     n_models = len(model_names)
     
-    # Custom Warm Terracotta / Earth Brown Colorscale
     warm_colorscale = [
         [0.0, "#FDF9F6"],
         [0.2, "#F6E4D9"],
@@ -133,6 +131,68 @@ def render_confusion_matrices(cm_dict: dict, split_title="TẬP KIỂM ĐỊNH V
         [1.0, "#8C4A32"]
     ]
     
+    if n_models == 1:
+        fig = go.Figure()
+        m = model_names[0]
+        cm = np.array(cm_dict[m])
+        max_val = cm.max() if cm.max() > 0 else 1
+        
+        heatmap = go.Heatmap(
+            z=cm,
+            x=labels,
+            y=labels,
+            colorscale=warm_colorscale,
+            showscale=False,
+            hoverinfo="x+y+z"
+        )
+        fig.add_trace(heatmap)
+        
+        for i in range(3):
+            for j in range(3):
+                val = cm[i, j]
+                intensity = val / max_val
+                text_color = "#FFFFFF" if intensity > 0.42 else "#2E2620"
+                row_sum = cm[i, :].sum()
+                pct_str = f"({(val/row_sum*100):.1f}%)" if row_sum > 0 else ""
+                
+                fig.add_annotation(
+                    x=labels[j],
+                    y=labels[i],
+                    text=f"<b>{val:,}</b><br><span style='font-size:11px;'>{pct_str}</span>",
+                    showarrow=False,
+                    font=dict(
+                        color=text_color,
+                        size=13,
+                        family="JetBrains Mono, monospace"
+                    )
+                )
+                
+        fig.update_xaxes(
+            title_text="Dự đoán (Predicted)",
+            title_font=dict(color=COLOR_TEXT_MUTED, size=12, family="Be Vietnam Pro, sans-serif"),
+            tickfont=dict(color=COLOR_TEXT_HEADING, size=12, family="Be Vietnam Pro, sans-serif")
+        )
+        fig.update_yaxes(
+            title_text="Thực tế (Ground Truth)",
+            title_font=dict(color=COLOR_TEXT_MUTED, size=12, family="Be Vietnam Pro, sans-serif"),
+            tickfont=dict(color=COLOR_TEXT_HEADING, size=12, family="Be Vietnam Pro, sans-serif"),
+            autorange="reversed"
+        )
+        fig.update_layout(
+            template="plotly_white",
+            title=dict(
+                text=f"<b>{m}</b>",
+                font=dict(size=14, color=COLOR_TEXT_HEADING, family="Be Vietnam Pro, sans-serif"),
+                x=0.5,
+                xanchor="center"
+            ),
+            height=340,
+            margin=dict(l=20, r=20, t=40, b=30),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        return fig
+        
     fig = make_subplots(
         rows=1, cols=n_models,
         subplot_titles=[f"<b>{m}</b>" for m in model_names],
@@ -153,15 +213,11 @@ def render_confusion_matrices(cm_dict: dict, split_title="TẬP KIỂM ĐỊNH V
         )
         fig.add_trace(heatmap, row=1, col=idx+1)
         
-        # Thêm nhãn số tương phản cao cho từng ô
         for i in range(3):
             for j in range(3):
                 val = cm[i, j]
                 intensity = val / max_val
-                # Chuẩn WCAG: Ô sáng -> chữ nâu đen, Ô tối -> chữ trắng
                 text_color = "#FFFFFF" if intensity > 0.42 else "#2E2620"
-                
-                # Tính phần trăm theo hàng (Recall của lớp)
                 row_sum = cm[i, :].sum()
                 pct_str = f"({(val/row_sum*100):.1f}%)" if row_sum > 0 else ""
                 
@@ -214,7 +270,7 @@ def render_confusion_matrices(cm_dict: dict, split_title="TẬP KIỂM ĐỊNH V
 # ==============================================================================
 def render_benchmark_comparison_chart(benchmark_data: dict):
     """Biểu đồ cột đối sánh các chỉ số thực nghiệm trên tập Validation (N=13,992)"""
-    models = ["Bi-LSTM (Baseline)", "BERT-base", "FinBERT (Champion)"]
+    models = ["Mô hình Bi-LSTM", "Mô hình FinBERT", "Mô hình BERT-base"]
     val_data = benchmark_data["validation"]
     
     acc = [val_data[m]["Accuracy"] * 100 for m in models]
@@ -243,7 +299,7 @@ def render_benchmark_comparison_chart(benchmark_data: dict):
         textfont=dict(color=COLOR_TEXT_HEADING, size=11, family="JetBrains Mono, monospace")
     ))
     fig.add_trace(go.Bar(
-        name='HIGH Precision (Độ chuẩn xác rủi ro)',
+        name='HIGH Precision (Chuẩn xác tác động mạnh)',
         x=models,
         y=high_p,
         marker_color=COLOR_MEDIUM,
@@ -252,7 +308,7 @@ def render_benchmark_comparison_chart(benchmark_data: dict):
         textfont=dict(color=COLOR_TEXT_HEADING, size=11, family="JetBrains Mono, monospace")
     ))
     fig.add_trace(go.Bar(
-        name='HIGH Recall (Tỷ lệ bắt rủi ro)',
+        name='HIGH Recall (Bao phủ tác động mạnh)',
         x=models,
         y=high_r,
         marker_color=COLOR_EARTH_BROWN,
@@ -297,13 +353,13 @@ def render_benchmark_comparison_chart(benchmark_data: dict):
     return fig
 
 # ==============================================================================
-# 4. KHÔNG GIAN TIỀM ẨN 3D (INTERACTIVE 3D LATENT EMBEDDING SPACE)
+# 4. KHÔNG GIAN TIỀM ẨN 3D (INTERACTIVE 3D LATENT EMBEDDING SPACE TỪ BERT-BASE)
 # ==============================================================================
-def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_centers: dict, sample_title="Current News"):
+def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_centers: dict, sample_title="Current News", model_name="Mô hình BERT-base", spread=0.65):
     """
     Biểu đồ 3D tương tác thể hiện không gian phân cụm 3 vùng tâm
     (LOW - Xanh rêu, MEDIUM - Vàng nghệ, HIGH - Terracotta)
-    và vector biểu diễn của bản tin hiện tại trên nền canvas kem ấm.
+    và vector biểu diễn của bản tin hiện tại theo mô hình được lựa chọn (Bi-LSTM, FinBERT, BERT-base).
     """
     np.random.seed(42)
     
@@ -311,9 +367,13 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
     c1 = np.array(cluster_centers[1]) # MEDIUM
     c2 = np.array(cluster_centers[2]) # HIGH
     
-    pts_0 = c0 + np.random.randn(80, 3) * 0.85
-    pts_1 = c1 + np.random.randn(90, 3) * 0.95
-    pts_2 = c2 + np.random.randn(45, 3) * 0.65
+    sp_low = spread * 1.05
+    sp_med = spread * 1.15
+    sp_high = spread * 0.85
+    
+    pts_0 = c0 + np.random.randn(80, 3) * sp_low
+    pts_1 = c1 + np.random.randn(90, 3) * sp_med
+    pts_2 = c2 + np.random.randn(45, 3) * sp_high
     
     fig = go.Figure()
     
@@ -338,7 +398,7 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
         x=pts_2[:, 0], y=pts_2[:, 1], z=pts_2[:, 2],
         mode='markers',
         marker=dict(size=5, color=COLOR_HIGH, opacity=0.7),
-        name='Cụm HIGH (Tác động mạnh / Rủi ro)'
+        name='Cụm HIGH (Tác động mạnh / Rủi ro vĩ mô)'
     ))
     
     # 4. Trọng tâm 3 cụm
@@ -353,18 +413,18 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
         name='Trọng tâm cụm (Centroids)'
     ))
     
-    # 5. Tọa độ vector bản tin hiện tại
+    # 5. Tọa độ vector bản tin hiện tại (Viên kim cương nổi bật)
     cur_x, cur_y, cur_z = current_coords
     cur_color = COLOR_HIGH if predicted_label == "HIGH" else (COLOR_MEDIUM if predicted_label == "MEDIUM" else COLOR_LOW)
     
     fig.add_trace(go.Scatter3d(
         x=[cur_x], y=[cur_y], z=[cur_z],
         mode='markers+text',
-        marker=dict(size=13, color=cur_color, symbol='diamond', line=dict(color='#FFFFFF', width=2.5)),
+        marker=dict(size=14, color=cur_color, symbol='diamond', line=dict(color='#FFFFFF', width=2.5)),
         text=[f"Bản tin: {predicted_label}"],
         textposition="bottom center",
         textfont=dict(color=COLOR_EARTH_BROWN, size=12, family="Be Vietnam Pro, sans-serif"),
-        name='Vector Bản tin Hiện tại'
+        name=f'Vector Bản tin Hiện tại ({model_name})'
     ))
     
     # 6. Đường chiếu tới tâm cụm dự đoán
@@ -375,13 +435,13 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
         z=[cur_z, target_center[2]],
         mode='lines',
         line=dict(color=COLOR_EARTH_BROWN, width=3.5, dash='dash'),
-        name='Đường chiếu Linear-Softmax'
+        name='Đường chiếu Phân loại Softmax'
     ))
     
     fig.update_layout(
         template="plotly_white",
         title=dict(
-            text="<b>KHÔNG GIAN TIỀM ẨN 3D (3D LATENT EMBEDDING SPACE) & ĐƯỜNG CHIẾU SOFTMAX</b>",
+            text=f"<b>KHÔNG GIAN TIỀM ẨN 3D (3D LATENT PCA) - {model_name.upper()}</b>",
             font=dict(size=14, color=COLOR_TEXT_HEADING, family="Be Vietnam Pro, sans-serif")
         ),
         height=520,
@@ -390,7 +450,7 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
         plot_bgcolor='rgba(0,0,0,0)',
         scene=dict(
             xaxis=dict(
-                title=dict(text='Trục UMAP 1', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
+                title=dict(text='Trục PCA 1', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
                 backgroundcolor='rgba(238, 234, 226, 0.7)',
                 gridcolor='#7A8B99',
                 gridwidth=1.5,
@@ -403,7 +463,7 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
                 tickfont=dict(color='#334155', size=10, family="JetBrains Mono, monospace")
             ),
             yaxis=dict(
-                title=dict(text='Trục UMAP 2', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
+                title=dict(text='Trục PCA 2', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
                 backgroundcolor='rgba(238, 234, 226, 0.7)',
                 gridcolor='#7A8B99',
                 gridwidth=1.5,
@@ -416,7 +476,7 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
                 tickfont=dict(color='#334155', size=10, family="JetBrains Mono, monospace")
             ),
             zaxis=dict(
-                title=dict(text='Trục UMAP 3', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
+                title=dict(text='Trục PCA 3', font=dict(color='#1E293B', size=11, family="Be Vietnam Pro, sans-serif")),
                 backgroundcolor='rgba(238, 234, 226, 0.7)',
                 gridcolor='#7A8B99',
                 gridwidth=1.5,
@@ -447,13 +507,13 @@ def render_3d_latent_space(current_coords: list, predicted_label: str, cluster_c
     return fig
 
 # ==============================================================================
-# 5. KHỐI HIỂN THỊ SELF-ATTENTION WEIGHTS (TẦNG 11 FINBERT)
+# 5. KHỐI HIỂN THỊ SELF-ATTENTION WEIGHTS (TẦNG 11 MÔ HÌNH BERT-BASE)
 # ==============================================================================
 def render_attention_heatmap_html(word_attention_list: list):
     """
     Tạo khối HTML thể hiện văn bản với hiệu ứng Heatmap sáng theo Self-Attention Weights.
     Tông màu học thuật (Nền trắng ngà, viền cấu trúc, chữ rõ nét, chống tràn dòng).
-    Đảm bảo loại bỏ hoàn toàn các ký tự thò thụt đầu dòng để tương thích an toàn với Streamlit markdown.
+    Áp dụng cơ chế phòng vệ 2 lớp (Two-tier Defense): Dấu câu và ký tự rác luôn mang màu xám nhạt tự nhiên.
     """
     if not word_attention_list:
         return f"<p style='color:{COLOR_TEXT_MUTED}; font-family:Be Vietnam Pro, sans-serif;'>Không có dữ liệu Attention trích xuất.</p>"
@@ -499,15 +559,14 @@ def render_attention_heatmap_html(word_attention_list: list):
         'padding: 20px 22px; line-height: 2.3; box-shadow: 0 2px 10px rgba(46, 38, 32, 0.05); '
         'font-family: sans-serif; word-wrap: break-word; overflow-wrap: break-word;">'
         '<div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #8C4A32; margin-bottom: 12px; font-weight: 700;">'
-        'Trọng số Chú ý Thực trích xuất từ Tầng cuối FinBERT (Layer 11 Self-Attention Weights):'
+        'Trọng số Chú ý Thực trích xuất từ Tầng cuối Mô hình BERT-base (Layer 11 Self-Attention Weights):'
         '</div>'
         f'{spans_joined}'
         '<div style="margin-top: 16px; font-size: 11.5px; color: #7A7067; display: flex; gap: 20px; align-items: center; border-top: 1px solid #D9CDC1; padding-top: 12px; flex-wrap: wrap;">'
         '<span><span style="display:inline-block; width:12px; height:12px; background:rgba(168, 181, 160, 0.4); border-radius:3px; vertical-align:middle; margin-right:4px;"></span> Chú ý thấp (&lt; 0.30)</span>'
         '<span><span style="display:inline-block; width:12px; height:12px; background:rgba(217, 164, 65, 0.6); border-radius:3px; vertical-align:middle; margin-right:4px;"></span> Chú ý trung bình (0.30 - 0.60)</span>'
-        '<span><span style="display:inline-block; width:12px; height:12px; background:rgba(201, 106, 75, 0.85); border-radius:3px; vertical-align:middle; margin-right:4px;"></span> Chú ý cao (&gt; 0.60) - Trọng tâm phân quyết</span>'
+        '<span><span style="display:inline-block; width:12px; height:12px; background:rgba(201, 106, 75, 0.85); border-radius:3px; vertical-align:middle; margin-right:4px;"></span> Chú ý cao (&gt; 0.60) - Trọng tâm dẫn dắt phán đoán</span>'
         '</div>'
         '</div>'
     )
     return full_html
-
